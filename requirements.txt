@@ -1,0 +1,9 @@
+
+ijson
+pandas
+requests
+strudel.utils
+strudel.scraper
+
+# non-pip dependencies:
+# sudo apt-get install docker-compose yajl-tools
