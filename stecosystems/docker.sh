@@ -14,7 +14,7 @@ fi
 #    NAME="--name \"pypi_${NAME%-*}\""
 #fi
 
-if [[ "$(docker images -q myimage:mytag 2> /dev/null)" == "" ]]; then
+if [[ "$(docker images -q ${IMAGE} 2> /dev/null)" == "" ]]; then
     BUILDDIR="$(dirname $0)/docker"
     DOCKERFILE="$BUILDDIR/${IMAGE}.dockerfile"
     if [[ ! -f "${DOCKERFILE}" ]]; then

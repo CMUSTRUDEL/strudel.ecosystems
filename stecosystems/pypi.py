@@ -1,38 +1,27 @@
 #!/usr/bin/env python
 
-"""An abstraction of Python package repository API (PyPi API)."""
-from __future__ import print_function, unicode_literals
+""" An abstraction of Python package repository API (PyPi API).
 
-import pandas as pd
+"""
 
-from collections import defaultdict
+from __future__ import print_function
+
 import json
-import logging
 import os
 import re
-import requests
 import shutil
 from xml.etree import ElementTree
 
-import stutils
-import stutils.decorators as d
-import stutils.email_utils as email
-from stutils import versions
-from stutils import mapreduce
+from .base import *
 from stutils import sysutils
-import stscraper as scraper
 
 DEFAULT_SAVE_PATH = '/tmp/pypi'
 # directory where package archives are stored
 PYPI_SAVE_PATH = stutils.get_config('PYPI_SAVE_PATH', DEFAULT_SAVE_PATH)
 sysutils.mkdir(PYPI_SAVE_PATH)
-# network timeout
-TIMEOUT = stutils.get_config('PYPI_TIMEOUT', 10)
-PYPI_URL = "https://pypi.org"
 
 logger = logging.getLogger("ghd.pypi")
 fs_cache = d.fs_cache('pypi')
-urlretrieve = sysutils.urlretrieve
 
 # path to provided shell scripts
 _PATH = os.path.dirname(__file__) or '.'
@@ -46,17 +35,17 @@ def shell(cmd, *args, **kwargs):
 
 
 # supported formats and extraction commands
-unzip = 'unzip -qq -o "%(fname)s" -d "%(dir)s" 2>/dev/null'
-untgz = 'tar -C "%(dir)s" --strip-components 1 -zxf "%(fname)s" 2>/dev/null'
-untbz = 'tar -C "%(dir)s" --strip-components 1 -jxf "%(fname)s" 2>/dev/null'
+UNZIP = 'unzip -qq -o "%(fname)s" -d "%(dir)s" 2>/dev/null'
+UNTGZ = 'tar -C "%(dir)s" --strip-components 1 -zxf "%(fname)s" 2>/dev/null'
+UNTBZ = 'tar -C "%(dir)s" --strip-components 1 -jxf "%(fname)s" 2>/dev/null'
 
 SUPPORTED_FORMATS = {
-    '.zip': unzip,
-    '.whl': unzip,
-    '.egg': unzip,  # can't find a single package to test. Are .eggs extinct?
-    '.tar.gz': untgz,
-    '.tgz': untgz,
-    '.tar.bz2': untbz,
+    '.zip': UNZIP,
+    '.whl': UNZIP,
+    '.egg': UNZIP,  # can't find a single package to test. Are .eggs extinct?
+    '.tar.gz': UNTGZ,
+    '.tgz': UNTGZ,
+    '.tar.bz2': UNTBZ,
     # rpm: contain directory structure from the root and thus can't be parsed
     # (same issue with bdist_dumb packages)
     # '.rpm': 'rpm2cpio "%(fname)s" | $(cd "%(dir)s" && cpio -i -d)'
@@ -65,11 +54,11 @@ SUPPORTED_FORMATS = {
 """
 Notes:
 1. There is no reliable source for supported Python version.
-    requires-dist format is described here: 
+    requires-dist format is described here:
         https://www.python.org/dev/peps/pep-0345/#version-specifiers
     Unfortunately, it is not informative at all:
         - vast majority (99%) of packages doesn't use it
-        - many of those who use do not conform to the standard
+        - many of those which use do not conform to the standard
 """
 
 
@@ -86,7 +75,7 @@ def get_builtins(python_version):
     text = requests.get(url, timeout=TIMEOUT, verify=False).text
     # text is html and can't be processed with Etree, so regexp it is
     return set(b for b in re.findall(
-        """<span\s+class=["']pre["']\s*>\s*([\w_-]+)\s*</span>""", text))
+        r"""<span\s+class=["']pre["']\s*>\s*([\w_-]+)\s*</span>""", text))
 
 
 def python_loc_size(package_dir):
@@ -117,30 +106,32 @@ def python_loc_size(package_dir):
     if status == 2:
         raise EnvironmentError("pylint is not installed (just in case, path is "
                                "%s)" % package_dir)
-    m = re.search("\|code\s*\|([\\s\\d]+?)\|", pylint_out)
+    m = re.search(r"\|code\s*\|([\s\d]+?)\|", pylint_out)
     match = m and m.group(1).strip()
     if not match:
         return 0
     return int(match)
 
 
-class Package(object):
-    name = None  # package name
-    path = None  # path of the file, used to find zgrep
+class Package(BasePackage):
+    base_url = "https://pypi.org"
     info = None  # stores cached package info
     _dirs = None  # created directories to cleanup later
 
     @classmethod
     def all(cls):
         tree = ElementTree.fromstring(cls._request("simple/").content)
-        return sorted(a.text.lower() for a in tree.iter('a'))
+        for package_name in sorted(a.text.lower() for a in tree.iter('a')):
+            try:
+                package = Package(package_name)
+            except PackageDoesNotExist:
+                continue
+            else:
+                yield package
 
-    def __init__(self, name):
-        self._dirs = []
-        self.name = name.lower()
+    def __init__(self, name, **kwargs):
         try:
-            r = self._request("pypi", self.name, "json")
-            self.info = r.json()
+            self.info = self._request("pypi", self.name, "json").json()
         except IOError:
             raise PackageDoesNotExist(
                 "Package %s does not exist on PyPi" % name)
@@ -148,8 +139,9 @@ class Package(object):
             # malformed json
             raise ValueError("PyPi package description is invalid")
 
-        self.canonical_name = self.info['info']['name']
+        self._dirs = []
         self.latest_ver = self.info['info'].get('version')
+        super(Package, self).__init__(self.info['info']['name'])
 
     def __del__(self):
         if DEFAULT_SAVE_PATH != PYPI_SAVE_PATH:
@@ -171,24 +163,13 @@ class Package(object):
     def __repr__(self):
         return "<PyPi package: %s>" % self.name
 
-    @staticmethod
-    def _request(*path):
-        for i in range(3):
-            try:
-                r = requests.get("/".join((PYPI_URL,) + path), timeout=TIMEOUT)
-            except requests.exceptions.Timeout:
-                continue
-            r.raise_for_status()
-            return r
-        raise IOError("Failed to reach PyPi. Check your Internet connection.")
-
     def releases(self, include_unstable=False, include_backports=False):
         """Return release labels
         :param include_unstable: bool, whether to include releases including
             symbols other than dots and numbers
         :param include_backports: bool, whether to include releases smaller in
             version than last stable release
-        :return list of string release labels
+        :return list of (label, date), sorted by date
 
         >>> len(Package("django").releases()) > 10
         True
@@ -202,16 +183,19 @@ class Package(object):
             for label, files in self.info['releases'].items()
             if files],  # skip empty releases
             key=lambda r: r[1])  # sort by date
+
         if not include_unstable:
             releases = [(label, date)
                         for label, date in releases
-                        if re.match("^\d+(\.\d+)*$", label)]
+                        if re.match(r"^\d+(\.\d+)*$", label)]
+
         if not include_backports and releases:
             _rel = []
             for label, date in releases:
                 if not _rel or versions.compare(label, _rel[-1][0]) >= 0:
                     _rel.append((label, date))
             releases = _rel
+
         return releases
 
     def download_url(self, ver):
@@ -260,7 +244,8 @@ class Package(object):
         # check if extraction folder exists
         extract_dir = os.path.join(PYPI_SAVE_PATH, self.name + "-" + ver)
         if os.path.isdir(extract_dir):
-            if any(os.path.isdir(dir) for dir in os.listdir(extract_dir)):
+            if any(os.path.isdir(dirname)
+                   for dirname in os.listdir(extract_dir)):
                 logger.debug(
                     "Package %s was downloaded already, skipping", self.name)
                 return extract_dir  # already extracted
@@ -270,8 +255,7 @@ class Package(object):
 
         # download file to the folder
         fname = os.path.join(extract_dir, download_url.rsplit("/", 1)[-1])
-        try:
-            # TODO: timeout handling
+        try:  # TODO: timeout handling
             urlretrieve(download_url, fname)
         except IOError:  # missing file, very rare but happens
             logger.warning("Broken PyPi link: %s", download_url)
@@ -425,7 +409,7 @@ class Package(object):
         return mod_paths
 
     @d.cached_property
-    def url(self):
+    def repository(self):
         """Search for a pattern in package info and package content
         Search places:
         - info home page field
@@ -438,7 +422,7 @@ class Package(object):
         """
         # check home page first
         m = scraper.URL_PATTERN.search(
-                      self.info.get('info', {}).get('home_page') or "")
+            self.info.get('info', {}).get('home_page', ""))
         if m:
             return m.group(0)
 
@@ -474,15 +458,34 @@ class Package(object):
         if info_path.endswith(".dist-info"):
             logger.debug("    .. WHEEL package, parsing from metadata.json")
             fname = os.path.join(info_path, 'metadata.json')
-            if not os.path.isfile(fname):
-                return default
-            info = json.load(open(fname))
-            # only unconditional dependencies are considered
-            # http://legacy.python.org/dev/peps/pep-0426/#dependency-specifiers
-            deps = []
-            for dep in info.get('run_requires', []):
-                if 'extra' not in dep and 'environment' not in dep:
-                    deps.extend(dep['requires'])
+            if os.path.isfile(fname):
+                info = json.load(open(fname))
+                # only unconditional dependencies are considered
+                # http://legacy.python.org/dev/peps/pep-0426/#dependency-specifiers
+                deps = []
+                for dep in info.get('run_requires', []):
+                    if 'extra' not in dep and 'environment' not in dep:
+                        deps.extend(dep['requires'])
+            else:
+                fname = os.path.join(info_path, 'METADATA')
+                if not os.path.isfile(fname):
+                    return default
+                # example record:
+                # Requires-Dist: numpy (>=1.9.0)
+                # len("Requires-Dist:") == 14
+                raw_deps = [line[14:].strip()
+                            for line in open(fname)
+                            if line.startswith("Requires-Dist:")]
+
+                deps = []
+                for raw_dep in raw_deps:
+                    chunks = raw_dep.split(None, 1)
+                    if len(chunks) == 1:
+                        deps.append(raw_dep)
+                        continue
+                    chunks[1] = chunks[1].strip("()")
+                    deps.append(" ".join(chunks))
+
         elif info_path.endswith(".egg-info"):
             logger.debug("    .. egg package, parsing requires.txt")
             fname = os.path.join(info_path, 'requires.txt')
@@ -502,183 +505,18 @@ class Package(object):
                 return default
             deps = params.get('install_requires', [])
 
-        def dep_split(dep):
-            match = re.match("[\w_.-]+", dep)
+        def dep_split(dependency):
+            match = re.match(r"[\w_.-]+", dependency)
             if not match:  # invalid dependency
                 name = ""
             else:
                 name = match.group(0)
-            version = dep[len(name):].strip()
+            version = dependency[len(name):].strip()
             return name, version
 
         return dict(dep_split(dep.strip()) for dep in deps if dep.strip())
 
     @d.cached_method
-    def size(self, ver):
+    def loc_size(self, ver):
         """get size in LOC"""
         return sum(python_loc_size(path) for path in self.module_paths(ver))
-
-
-@fs_cache
-def packages_info():
-    """
-    :return: a pd.Dataframe with columns:
-        - author: author email, str
-        - url: an str suitable for scraper.parse_url() or scraper.get_provider()
-        - license: unstructured str to be used with common.utils.parse_license()
-
-    >>> packages = packages_info()
-    >>> isinstance(packages, pd.DataFrame)
-    True
-    >>> len(packages) > 100000
-    True
-    >>> all(col in packages.columns for col in ('url', 'author', 'license'))
-    True
-    """
-    names = []  # list of package names
-    urls = {}  # urls[pkgname] = github_url
-    authors = {}  # authors[pkgname] = author_email
-    licenses = {}
-    author_projects = defaultdict(list)
-    author_orgs = defaultdict(
-        lambda: defaultdict(int))  # orgs[author] = {org: num_packages}
-
-    for package_name in Package.all():
-        logger.info("Processing %s", package_name)
-        try:
-            p = Package(package_name)
-        except PackageDoesNotExist:
-            # some deleted packages aren't removed from the list
-            continue
-        names.append(package_name)
-
-        if p.url:
-            urls[package_name] = p.url
-
-        try:
-            author_email = email.clean(p.info["info"].get('author_email'))
-        except email.InvalidEmail:
-            author_email = None
-
-        if author_email:
-            author_projects[author_email].append(package_name)
-
-        authors[package_name] = author_email
-        licenses[package_name] = p.info['info']['license']
-
-        if p.url:
-            provider, project_url = scraper.parse_url(p.url)
-            if provider == "github.com":
-                org, _ = project_url.split("/")
-                author_orgs[author_email][org] += 1
-
-    # at this point, we have ~54K repos
-    # by guessing github account from author affiliations we can get 8K more
-    processed = 1
-    total = len(author_projects)
-    for author, packages in author_projects.items():
-        logger.info("Postprocessing authors (%d out of %d): %s",
-                    processed, total, author)
-        processed += 1
-        # check all orgs of the author, starting from most used ones
-        orgs = [org for org, _ in
-                sorted(author_orgs[author].items(), key=lambda x: -x[1])]
-        if not orgs:
-            continue
-        for package in packages:
-            if package in urls:
-                continue
-            for org in orgs:
-                url = "%s/%s" % (org, package)
-                r = requests.get("https://github.com/" + url)
-                if r.status_code == 200:
-                    urls[package] = url
-                    break
-
-    return pd.DataFrame({"url": urls, "author": authors, 'license': licenses},
-                        index=names)
-
-
-# Note that this method already uses internal cache. However, we probably don't
-# want to update this cache every time; thus, we have additional caching with
-# @fs_cache instance to make updates in 3 month (d.DEFAULT_EXPIRY) increments
-@fs_cache
-def dependencies():
-    """ Get a bunch of information about npm packages
-    This will return pd.DataFrame with package name as index and columns:
-        - version: version of release, str
-        - date: release date, ISO str
-        - deps: names of dependencies, comma separated string
-        - raw_dependencies: dependencies, JSON dict name: ver
-        - raw_test_dependencies
-        - raw_build_dependencies
-    """
-    deps = {}
-    fname = fs_cache.get_cache_fname(".deps_and_size.cache")
-
-    if os.path.isfile(fname):
-        logger.info("deps_and_size() cache file already exists. "
-                    "Existing records will be reused")
-
-        def gen(df):
-            d = {}
-            for index, row in df.iterrows():
-                item = row.to_dict()
-                item["name"] = index[0]
-                item["version"] = index[1]
-                d[tuple(index)] = item
-            return d
-
-        deps = gen(pd.read_csv(fname, index_col=["name", "version"]))
-
-    else:
-        logger.info("deps_and_size() cache file doesn't exists. "
-                    "Computing everything from scratch is a lengthy process "
-                    "and will likely take a week or so")
-
-    tp = mapreduce.ThreadPool()
-    logger.info("Starting a threadppol with %d workers...", tp.n)
-
-    package_names = packages_info().index
-
-    def do(pkg_name, ver, release_date):
-        # this method is used by worker threads, calling done() on finish
-        p_deps = Package(pkg_name).dependencies(ver)
-
-        return {
-            'name': pkg_name,
-            'version': ver,
-            'date': release_date,
-            'deps': ",".join(p_deps.keys()).lower(),
-            'raw_dependencies': json.dumps(p_deps)
-        }
-
-    def done(output):
-        deps[(output["name"], output["version"])] = output
-
-    for package_name in package_names:
-        logger.info("Processing %s", package_name)
-        try:
-            p = Package(package_name)
-        except PackageDoesNotExist:
-            continue
-
-        for version, release_date in p.releases(True, True):
-            if (package_name, version) not in deps:
-                logger.info("    %s", version)
-                tp.submit(do, package_name, version, release_date, callback=done)
-            else:
-                logger.info("    %s (cached)", version)
-
-    # wait for workers to complete
-    tp.shutdown()
-
-    # save updates
-    df = pd.DataFrame(deps.values()).sort_values(["name", "version"]).set_index(
-        ["name", "version"], drop=True)
-    df.to_csv(fname)
-
-    return df
-
-
-

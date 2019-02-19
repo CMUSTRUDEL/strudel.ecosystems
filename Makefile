@@ -4,14 +4,14 @@ TESTROOT = stecosystems
 
 .PHONY: test
 test:
-	python -m doctest $(TESTROOT); python -m unittest test
+	python -m doctest $(TESTROOT)/*.py
+	python -m unittest test
 
 .PHONY: publish
 publish:
-	$(MAKE) clean
-	$(MAKE) test
-	python setup.py sdist bdist_wheel
-	twine upload dist/*
+	test $$(git config user.name) || git config user.name "semantic-release (via TravisCI)"
+	test $$(git config user.email) || git config user.email "semantic-release@travis"
+	semantic-release publish
 
 .PHONY: clean
 clean:
@@ -24,8 +24,14 @@ clean:
 html:
 	sphinx-build -M html "docs" "docs/build"
 
+.PHONY: install
+install:
+	pip install -r requirements.txt
+	apt-get install yajl-tools
+
 .PHONY: install_dev
 install_dev:
-	sudo apt-get install docker-compose yajl-tools
-	pip install --user -r requirements.txt
-	pip install --user  sphinx sphinx-autobuild
+	$(MAKE) install
+	apt-get install docker-compose
+	pip install sphinx sphinx-autobuild
+	pip install python-semantic-release

@@ -1,49 +1,33 @@
-#!/usr/bin/env python
 
-"""
-API docs:
-    https://github.com/npm/registry/blob/master/docs/REGISTRY-API.md
-API base URL:
-    http://registry.npmjs.com/
+import logging
 
-extra metrics:
-    https://api-docs.npms.io/#api-Package-GetMultiPackageInfo
+import requests
+import six
 
-"""
+import stscraper as scraper
+import stutils
+import stutils.decorators as d
+from stutils import versions
 
-from __future__ import print_function
-
-import urllib
-
-import ijson.backends.yajl2 as ijson
-
-from .base import *
-from stutils import decorators as d
-
-fs_cache = d.fs_cache('npm')
+TIMEOUT = stutils.get_config('PYPI_TIMEOUT', 10)
+urlretrieve = six.moves.urllib.request.urlretrieve
+logger = logging.getLogger('stecosystems')
 
 
-class Package(BasePackage):
-    base_url = 'http://registry.npmjs.com/'
-    info = None  # stores cached package info
+class PackageDoesNotExist(ValueError):
+    pass
+
+
+class BasePackage(object):
+    base_url = None
+    name = None  # package name
 
     @classmethod
-    def all(cls, cache_file=None):
-        if isinstance(cache_file, six.string_types):
-            fh = open(cache_file, 'rb')
-        elif isinstance(cache_file, file):
-            fh = cache_file
-        else:
-            # how to create cache file: wget -O npm.json <url below>
-            # it is 14Gb as of Jan 2019
-            fh = urllib.urlopen(
-                'https://skimdb.npmjs.com/registry/_all_docs?include_docs=true')
+    def all(cls, **kwargs):
+        # type: (**dict) -> BasePackage
+        raise NotImplementedError
 
-        for package_info in ijson.items(fh, 'rows.item'):
-            package_name = package_info['id']
-            yield Package(package_name, info=package_info['doc'])
-
-    def __init__(self, name, info=None):
+    def __init__(self, name, **kwargs):
         """
         Args:
             name (str): package name.
@@ -53,33 +37,13 @@ class Package(BasePackage):
                 cheaper to reuse it.
                 End users should not use this parameter.
         """
-        if info:
-            self.info = info
-        else:
-            try:
-                self.info = self._request(name).json()
-            except IOError:
-                raise PackageDoesNotExist(
-                    "Package %s does not exist in npm" % name)
+        self.name = name
 
-        super(Package, self).__init__(name)
+    def __str__(self):
+        return self.name
 
-    @d.cached_property
-    def _extra_info(self):
-        return requests.get(
-            "https://api.npms.io/v2/package/" + self.name).json()
-
-    @property
-    def quality(self):
-        return json_path(self._extra_info, 'score', 'detail', 'quality')
-
-    @property
-    def popularity(self):
-        return json_path(self._extra_info, 'score', 'detail', 'popularity')
-
-    @property
-    def maintenance_score(self):
-        return json_path(self._extra_info, 'score', 'detail', 'maintenance')
+    def __repr__(self):
+        return "<?? package: %s>" % self.name
 
     @classmethod
     def _request(cls, *path):
@@ -121,7 +85,6 @@ class Package(BasePackage):
         Returns:
             Optional[str]: url string if found, None otherwise
         """
-        assert ver in self.info['releases']
         raise NotImplementedError
 
     def download(self, ver=None):
@@ -136,7 +99,7 @@ class Package(BasePackage):
         """
         raise NotImplementedError
 
-    @d.cached_property
+    @property
     def repository(self):
         """ Search for software repository URL
 
@@ -162,3 +125,49 @@ class Package(BasePackage):
     def loc_size(self, ver):
         """ Get package size in LOC """
         raise NotImplementedError
+
+
+def resolve_field(item, field, default=None):
+    """Retrieve a field from JSON structure
+
+    >>> item = {'one': 1, 'two': [1], 'three': {}}
+    >>> resolve_field(item, 'one')
+    1
+    >>> resolve_field(item, 'two')
+    1
+    >>> resolve_field(item, 'three')
+    {}
+    >>> resolve_field(item, 'four') is None
+    True
+    """
+    if not item:
+        return default
+    if isinstance(item, list):
+        res = resolve_field(item[0], field)
+    elif isinstance(item, six.string_types):
+        res = item
+    else:
+        res = item.get(field, default)
+
+    if isinstance(res, list):
+        return res[0]
+    return res
+
+
+def json_path(item, *path):
+    # type: (dict, *str) -> object
+    """Helper function to traverse JSON
+
+    >>> a = {'doc': {'versions': {'0.1': {'time': '2018-01-01T00:00.00.00Z'}}}}
+    >>> json_path(a, 'doc', 'versions', '0.1', 'time')
+    '2018-01-01T00:00.00.00Z'
+    >>> json_path(a, 'doc', 'times', '0.1', 'time') is None
+    True
+    """
+    res = item
+    for key in path:
+        try:  # this way is faster and supports list indexes
+            res = res[key]
+        except (IndexError, KeyError):
+            return None
+    return res
