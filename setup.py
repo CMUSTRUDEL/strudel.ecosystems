@@ -6,7 +6,7 @@ from setuptools import setup
 
 # get author, version and license from package files
 # since it has some not yet installed dependencies, parsing the file:
-package = 'stutils'
+package = 'stecosystems'
 head = open(os.path.join(package, '__init__.py')).read(2048)
 pattern = r"""__%s__\s*=\s*['"]([^'"]*)['"]"""
 kwargs = {keyword: re.search(pattern % keyword, head).group(1)

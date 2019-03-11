@@ -5,13 +5,14 @@ import os
 
 import pandas as pd
 
-from .base import *
 import stutils.email_utils as email
 import stscraper as scraper
 from stutils import decorators as d
 from stutils import mapreduce
-import pypi
-import npm
+
+from .base import *
+from . import pypi
+from . import npm
 
 fs_cache = d.fs_cache('npm')
 

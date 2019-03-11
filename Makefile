@@ -4,7 +4,7 @@ TESTROOT = stecosystems
 
 .PHONY: test
 test:
-	python -m doctest $(TESTROOT)/*.py
+#	python -m doctest $(TESTROOT)/*.py
 	python -m unittest test
 
 .PHONY: publish

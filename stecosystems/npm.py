@@ -31,7 +31,7 @@ class Package(BasePackage):
     def all(cls, cache_file=None):
         if isinstance(cache_file, six.string_types):
             fh = open(cache_file, 'rb')
-        elif isinstance(cache_file, file):
+        elif isinstance(cache_file, six.StringIO):
             fh = cache_file
         else:
             # how to create cache file: wget -O npm.json <url below>
