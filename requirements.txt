@@ -2,6 +2,7 @@
 ijson
 pandas
 requests
+six
 strudel.utils
 strudel.scraper
 

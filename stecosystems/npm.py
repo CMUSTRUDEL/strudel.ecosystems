@@ -15,8 +15,6 @@ from __future__ import print_function
 
 import urllib
 
-import ijson.backends.yajl2 as ijson
-
 from .base import *
 from stutils import decorators as d
 
@@ -39,6 +37,9 @@ class Package(BasePackage):
             fh = urllib.urlopen(
                 'https://skimdb.npmjs.com/registry/_all_docs?include_docs=true')
 
+        # requires yajl-tools: apt-get install yajl-tools
+        import ijson.backends.yajl2 as ijson
+
         for package_info in ijson.items(fh, 'rows.item'):
             package_name = package_info['id']
             yield Package(package_name, info=package_info['doc'])
@@ -60,14 +61,15 @@ class Package(BasePackage):
                 self.info = self._request(name).json()
             except IOError:
                 raise PackageDoesNotExist(
-                    "Package %s does not exist in npm" % name)
+                    "Package %s does not exist or not public" % name)
 
         super(Package, self).__init__(name)
 
     @d.cached_property
     def _extra_info(self):
         return requests.get(
-            "https://api.npms.io/v2/package/" + self.name).json()
+            "https://api.npms.io/v2/package/" +
+            six.moves.urllib.parse.quote_plus(self.name)).json()
 
     @property
     def quality(self):
