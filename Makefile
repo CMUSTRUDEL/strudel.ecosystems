@@ -27,7 +27,7 @@ html:
 .PHONY: install
 install:
 	pip install -r requirements.txt
-	apt-get install yajl-tools
+	sudo apt-get install yajl-tools
 
 .PHONY: install_dev
 install_dev:
