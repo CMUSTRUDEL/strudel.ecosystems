@@ -32,6 +32,6 @@ install:
 .PHONY: install_dev
 install_dev:
 	$(MAKE) install
-	apt-get install docker-compose
+	sudo apt-get install docker-compose
 	pip install sphinx sphinx-autobuild
 	pip install python-semantic-release
