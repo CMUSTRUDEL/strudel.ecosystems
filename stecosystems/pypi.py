@@ -10,15 +10,27 @@ import json
 import os
 import re
 import shutil
+import tempfile
+import warnings
 from xml.etree import ElementTree
 
 from .base import *
+import stscraper as scraper
+from stutils import decorators as d
 from stutils import sysutils
 
-DEFAULT_SAVE_PATH = '/tmp/pypi'
+DEFAULT_SAVE_PATH = os.path.join(tempfile.gettempdir(), 'pypi')
 # directory where package archives are stored
-PYPI_SAVE_PATH = stutils.get_config('PYPI_SAVE_PATH', DEFAULT_SAVE_PATH)
-sysutils.mkdir(PYPI_SAVE_PATH)
+try:
+    PYPI_SAVE_PATH = stutils.get_config('PYPI_SAVE_PATH', DEFAULT_SAVE_PATH)
+    sysutils.mkdir(PYPI_SAVE_PATH)
+except FileNotFoundError:
+    warnings.warn(
+        "\nThe configured PyPI save path (%s) doesn't exist.\nFalling back "
+        "to default (%s)" % (PYPI_SAVE_PATH, DEFAULT_SAVE_PATH),
+        RuntimeWarning)
+    PYPI_SAVE_PATH = DEFAULT_SAVE_PATH
+    sysutils.mkdir(PYPI_SAVE_PATH)
 
 logger = logging.getLogger("ghd.pypi")
 fs_cache = d.fs_cache('pypi')
@@ -79,7 +91,8 @@ BUILTINS = {
 
 def shell(cmd, *args, **kwargs):
     if kwargs.get('local', True):
-        del kwargs['local']
+        if 'local' in kwargs:
+            del kwargs['local']
         kwargs['rel_path'] = _PATH
     return sysutils.shell(cmd, *args, **kwargs)
 
@@ -180,8 +193,9 @@ class Package(BasePackage):
                 yield package
 
     def __init__(self, name, **kwargs):
+        self.name = name
         try:
-            self.info = self._request("pypi", self.name, "json").json()
+            self.info = self._request("pypi", name, "json").json()
         except IOError:
             raise PackageDoesNotExist(
                 "Package %s does not exist on PyPi" % name)
@@ -208,7 +222,7 @@ class Package(BasePackage):
                              self.name, folder)
 
     def __str__(self):
-        return self.canonical_name
+        return self.name
 
     def __repr__(self):
         return "<PyPi package: %s>" % self.name
@@ -366,7 +380,7 @@ class Package(BasePackage):
         # This rule was defined in old PyPI Packaging User Guide, but it is not
         # in the actual version. It is quoted here:
         # https://github.com/pypa/pipenv/issues/1302
-        cname = re.sub("[_-]+", "_", self.canonical_name)
+        cname = re.sub("[_-]+", "_", self.name)
         dist_info_path = "%s-%s.dist-info" % (cname, ver)
         egg_info_path = "%s.egg-info" % cname
         for info_path in (dist_info_path, egg_info_path, "EGG-INFO"):
