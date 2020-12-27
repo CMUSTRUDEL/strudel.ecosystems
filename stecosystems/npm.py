@@ -18,8 +18,6 @@ import urllib
 from .base import *
 from stutils import decorators as d
 
-fs_cache = d.fs_cache('npm')
-
 
 class Package(BasePackage):
     base_url = 'http://registry.npmjs.com/'
