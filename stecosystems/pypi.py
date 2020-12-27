@@ -6,11 +6,13 @@
 
 from __future__ import print_function
 
+import ast  # used to parse setuptools.setup() parameters from setup.py
 import json
 import os
 import re
 import shutil
 import tempfile
+from typing import Dict, Optional
 import warnings
 from xml.etree import ElementTree
 
@@ -174,6 +176,40 @@ def python_loc_size(package_dir):
     if not match:
         return 0
     return int(match)
+
+
+def parse_setup_params(setup_source_code):
+    # type: (str) -> Dict[str, str]
+    """ Attempt to parse setuptools.setup() parameters from setup.py
+
+    This is a cheaper alternative to simulated install used by
+    `Package.get_setup_params()`
+    """
+    tree = ast.parse(setup_source_code, filename='setup.py')  # type: ast.Module
+    setup_call = None  # type: Optional[ast.Call]
+    # search for a call to a function named `setup`
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        # if imported as `from setuptools import setup` or
+        #   `from setuptools import *`, the node will have `id`
+        # if imported as `import setuptools` and called as `setuptools.setup(),
+        #   the node will have attr
+        if (hasattr(node.func, 'id') and node.func.id == 'setup'
+                or hasattr(node.func, 'attr') and node.func.attr == 'setup'):
+            setup_call = node
+            break
+    if setup_call is None:
+        raise ValueError('Call to `setuptools.setup()` not found')
+    res = {}
+    for kw in setup_call.keywords:
+        try:
+            # safe evaluation, will perform only basic operations
+            # potentially, might crash the interpreter
+            res[kw.arg] = ast.literal_eval(kw.value)
+        except ValueError:
+            continue
+    return res
 
 
 class Package(BasePackage):
